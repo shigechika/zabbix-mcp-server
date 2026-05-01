@@ -967,6 +967,11 @@ _UNTRUSTED_PREAMBLE = (
 )
 
 
+def _format_result(data: str, raw_json: bool) -> str:
+    """Return *data* with the untrusted preamble prepended, unless *raw_json* is true."""
+    return data if raw_json else _UNTRUSTED_PREAMBLE + data
+
+
 def _truncate_result(result: Any, *, max_chars: int = _RESPONSE_MAX_CHARS) -> str:
     """Serialize *result* to JSON, truncating data before serialization so the
     output is always valid JSON.
@@ -1095,9 +1100,7 @@ def _make_tool_handler(
                 client_manager.call, server_name, method_def.api_method, params,
             )
             data = _truncate_result(result, max_chars=response_max_chars)
-            if raw_json:
-                return data
-            return _UNTRUSTED_PREAMBLE + data
+            return _format_result(data, raw_json)
 
         except (ReadOnlyError, RateLimitError) as e:
             return json.dumps({"error": True, "message": str(e), "type": type(e).__name__})
@@ -1287,9 +1290,7 @@ def _register_tools(
                 client_manager.call, server_name, method, params or {},
             )
             data = _truncate_result(result, max_chars=response_max_chars)
-            if raw_json:
-                return data
-            return _UNTRUSTED_PREAMBLE + data
+            return _format_result(data, raw_json)
         except (ReadOnlyError, RateLimitError, ValueError) as e:
             return json.dumps({"error": True, "message": str(e), "type": type(e).__name__})
         except Exception as e:
