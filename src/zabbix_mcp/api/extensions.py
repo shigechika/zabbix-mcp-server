@@ -616,20 +616,13 @@ def item_threshold_search(
         On error, returns ``{"error": "..."}``.
     """
     try:
-        # --- Extract tool-specific parameters (not forwarded to Zabbix API) ---
-        lastvalue_gt = kwargs.get("lastvalue_gt")
-        lastvalue_ge = kwargs.get("lastvalue_ge")
-        lastvalue_lt = kwargs.get("lastvalue_lt")
-        lastvalue_le = kwargs.get("lastvalue_le")
         sort_desc = bool(kwargs.get("sort_desc", True))
         result_limit = kwargs.get("result_limit")
         extra_params: dict[str, Any] = kwargs.get("extra_params") or {}
 
-        # --- Build item.get parameters ---
         # extra_params merged first so explicit arguments take precedence on conflict
         params: dict[str, Any] = dict(extra_params)
 
-        # Validate and normalise output; always inject lastvalue for filtering
         output = kwargs.get("output") or "itemid,name,key_,lastvalue"
         if output == "count":
             return _error_json(
@@ -650,12 +643,19 @@ def item_threshold_search(
             if val is not None:
                 params[key] = val
 
-        # --- Fetch all matching items ---
         items: list[dict[str, Any]] = client_manager.call(server_name, "item.get", params)
         scanned = len(items)
 
-        # --- Filter by lastvalue threshold conditions ---
-        matched: list[dict[str, Any]] = []
+        raw_gt = kwargs.get("lastvalue_gt")
+        raw_ge = kwargs.get("lastvalue_ge")
+        raw_lt = kwargs.get("lastvalue_lt")
+        raw_le = kwargs.get("lastvalue_le")
+        gt = float(raw_gt) if raw_gt is not None else None
+        ge = float(raw_ge) if raw_ge is not None else None
+        lt = float(raw_lt) if raw_lt is not None else None
+        le = float(raw_le) if raw_le is not None else None
+
+        matched_with_vals: list[tuple[float, dict[str, Any]]] = []
         for item in items:
             raw = item.get("lastvalue")
             if raw is None or raw == "":
@@ -664,27 +664,20 @@ def item_threshold_search(
                 val = float(raw)
             except (ValueError, TypeError):
                 continue
-
-            if lastvalue_gt is not None and not (val > float(lastvalue_gt)):
+            if gt is not None and val <= gt:
                 continue
-            if lastvalue_ge is not None and not (val >= float(lastvalue_ge)):
+            if ge is not None and val < ge:
                 continue
-            if lastvalue_lt is not None and not (val < float(lastvalue_lt)):
+            if lt is not None and val >= lt:
                 continue
-            if lastvalue_le is not None and not (val <= float(lastvalue_le)):
+            if le is not None and val > le:
                 continue
+            matched_with_vals.append((val, item))
 
-            matched.append(item)
-
-        # --- Sort by lastvalue ---
-        matched.sort(
-            key=lambda x: float(x.get("lastvalue") or 0),
-            reverse=sort_desc,
-        )
-
+        matched_with_vals.sort(key=lambda x: x[0], reverse=sort_desc)
+        matched = [item for _, item in matched_with_vals]
         total_matched = len(matched)
 
-        # --- Apply result limit ---
         if result_limit is not None:
             matched = matched[: int(result_limit)]
 
