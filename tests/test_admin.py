@@ -598,12 +598,14 @@ class TestItemThresholdSearch(unittest.TestCase):
     def test_no_threshold_returns_all_numeric(self):
         data = self._call(self._make_items([1.0, 2.0, 3.0]))
         self.assertEqual(data["matched"], 3)
+        self.assertEqual(data["returned"], 3)
 
     def test_result_limit(self):
         data = self._call(self._make_items([10.0, 20.0, 30.0, 40.0, 50.0]),
                           lastvalue_gt=0, result_limit=2)
+        self.assertEqual(data["matched"], 5)   # total passing threshold
+        self.assertEqual(data["returned"], 2)  # items actually returned
         self.assertEqual(len(data["items"]), 2)
-        self.assertEqual(data["matched"], 2)
 
     def test_output_injects_lastvalue(self):
         """When output omits lastvalue, it must be injected for filtering."""

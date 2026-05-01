@@ -609,10 +609,11 @@ def item_threshold_search(
               filtering and sorting.
 
     Returns:
-        JSON string ``{"scanned": N, "matched": M, "items": [...]}``, where
-        *scanned* is the total items returned by ``item.get`` and *matched* is
-        the count after threshold filtering.  On error, returns
-        ``{"error": "..."}``.
+        JSON string ``{"scanned": N, "matched": M, "returned": R, "items": [...]}``,
+        where *scanned* is the total items from ``item.get``, *matched* is the
+        count passing the threshold filter, and *returned* is the number of items
+        actually included (equal to *matched* unless ``result_limit`` is set).
+        On error, returns ``{"error": "..."}``.
     """
     try:
         # --- Extract tool-specific parameters (not forwarded to Zabbix API) ---
@@ -681,13 +682,16 @@ def item_threshold_search(
             reverse=sort_desc,
         )
 
+        total_matched = len(matched)
+
         # --- Apply result limit ---
         if result_limit is not None:
             matched = matched[: int(result_limit)]
 
         return json.dumps({
             "scanned": scanned,
-            "matched": len(matched),
+            "matched": total_matched,
+            "returned": len(matched),
             "items": matched,
         }, ensure_ascii=False)
 

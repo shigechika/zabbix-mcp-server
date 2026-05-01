@@ -1416,7 +1416,8 @@ def _register_tools(
         - Interface discard counter above 0: search={"key_": "discards"}, lastvalue_gt=0
         - Disk usage near capacity: search={"key_": "pused"}, lastvalue_ge=80
 
-        Returns {"scanned": N, "matched": M, "items": [...]} sorted by lastvalue."""
+        Returns {"scanned": N, "matched": M, "returned": R, "items": [...]} sorted by lastvalue.
+        matched = total passing threshold; returned = items included (may be less if result_limit set)."""
         srv = client_manager.resolve_server(server or client_manager.default_server)
         _auth_err = check_token_authorization(srv, tool_prefix="item")
         if _auth_err:
