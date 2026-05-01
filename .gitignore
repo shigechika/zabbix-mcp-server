@@ -22,6 +22,7 @@ tests/verify_ui.js
 tests/integration/
 .DS_Store
 .claude/
+CLAUDE.md
 *.key
 *.pem
 *.p12
