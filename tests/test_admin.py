@@ -487,6 +487,7 @@ class TestToolGroups(unittest.TestCase):
         from zabbix_mcp.config import TOOL_GROUPS
         ext = TOOL_GROUPS["extensions"]
         for tool in ["graph_render", "anomaly_detect", "capacity_forecast",
+                     "item_threshold_search",
                      "report_generate", "action_prepare", "action_confirm",
                      "zabbix_raw_api_call", "health_check"]:
             self.assertIn(tool, ext, f"{tool} missing from extensions group")
@@ -520,6 +521,137 @@ class TestToolGroups(unittest.TestCase):
         from zabbix_mcp.config import TOOL_GROUPS
         expected = {"monitoring", "data_collection", "alerts", "users", "administration", "extensions"}
         self.assertEqual(set(TOOL_GROUPS.keys()), expected)
+
+
+# ---------------------------------------------------------------------------
+# item_threshold_search (extensions.py)
+# ---------------------------------------------------------------------------
+class TestItemThresholdSearch(unittest.TestCase):
+    """Unit tests for the item_threshold_search extension."""
+
+    def _make_mgr(self, items):
+        """Build a minimal mock ClientManager that returns given items."""
+        from unittest.mock import MagicMock
+        mgr = MagicMock()
+        mgr.call.return_value = items
+        return mgr
+
+    def _call(self, items, **kwargs):
+        from zabbix_mcp.api.extensions import item_threshold_search
+        mgr = self._make_mgr(items)
+        result = item_threshold_search(mgr, "test", **kwargs)
+        return json.loads(result)
+
+    def _make_items(self, values):
+        return [
+            {"itemid": str(i), "name": f"item{i}", "key_": f"key{i}", "lastvalue": str(v)}
+            for i, v in enumerate(values)
+        ]
+
+    def test_lastvalue_ge_filters_correctly(self):
+        data = self._call(self._make_items([10.0, 50.0, 75.0, 0.0]), lastvalue_ge=50.0)
+        self.assertEqual(data["scanned"], 4)
+        self.assertEqual(data["matched"], 2)
+        self.assertEqual(data["returned"], 2)
+        matched_vals = [float(i["lastvalue"]) for i in data["items"]]
+        self.assertIn(50.0, matched_vals)
+        self.assertIn(75.0, matched_vals)
+
+    def test_lastvalue_gt_excludes_equal(self):
+        data = self._call(self._make_items([50.0, 50.1, 49.9]), lastvalue_gt=50.0)
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
+        self.assertEqual(float(data["items"][0]["lastvalue"]), 50.1)
+
+    def test_lastvalue_le_filters_correctly(self):
+        data = self._call(self._make_items([0.0, 5.0, 10.0, 100.0]), lastvalue_le=10.0)
+        self.assertEqual(data["matched"], 3)
+        self.assertEqual(data["returned"], 3)
+
+    def test_lastvalue_lt_excludes_equal(self):
+        data = self._call(self._make_items([9.9, 10.0, 10.1]), lastvalue_lt=10.0)
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
+        self.assertEqual(float(data["items"][0]["lastvalue"]), 9.9)
+
+    def test_combined_ge_and_le(self):
+        data = self._call(self._make_items([20.0, 50.0, 80.0, 90.0]), lastvalue_ge=50.0, lastvalue_le=80.0)
+        self.assertEqual(data["matched"], 2)
+        self.assertEqual(data["returned"], 2)
+
+    def test_sorted_desc_by_default(self):
+        data = self._call(self._make_items([30.0, 10.0, 70.0, 50.0]), lastvalue_gt=0)
+        vals = [float(i["lastvalue"]) for i in data["items"]]
+        self.assertEqual(vals, sorted(vals, reverse=True))
+
+    def test_sort_asc(self):
+        data = self._call(self._make_items([30.0, 10.0, 70.0]), lastvalue_gt=0, sort_desc=False)
+        vals = [float(i["lastvalue"]) for i in data["items"]]
+        self.assertEqual(vals, sorted(vals))
+
+    def test_non_numeric_skipped(self):
+        items = [
+            {"itemid": "1", "name": "a", "key_": "k1", "lastvalue": "N/A"},
+            {"itemid": "2", "name": "b", "key_": "k2", "lastvalue": "55.0"},
+            {"itemid": "3", "name": "c", "key_": "k3", "lastvalue": ""},
+            {"itemid": "4", "name": "d", "key_": "k4", "lastvalue": None},
+        ]
+        data = self._call(items, lastvalue_ge=0)
+        self.assertEqual(data["scanned"], 4)
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
+
+    def test_no_threshold_returns_all_numeric(self):
+        data = self._call(self._make_items([1.0, 2.0, 3.0]))
+        self.assertEqual(data["matched"], 3)
+        self.assertEqual(data["returned"], 3)
+
+    def test_result_limit(self):
+        data = self._call(self._make_items([10.0, 20.0, 30.0, 40.0, 50.0]),
+                          lastvalue_gt=0, result_limit=2)
+        self.assertEqual(data["matched"], 5)   # total passing threshold
+        self.assertEqual(data["returned"], 2)  # items actually returned
+        self.assertEqual(len(data["items"]), 2)
+
+    def test_output_injects_lastvalue(self):
+        """When output omits lastvalue, it must be injected for filtering."""
+        from unittest.mock import MagicMock
+        from zabbix_mcp.api.extensions import item_threshold_search
+        mgr = MagicMock()
+        mgr.call.return_value = self._make_items([60.0])
+        item_threshold_search(mgr, "test", output="itemid,name,key_", lastvalue_ge=50.0)
+        call_params = mgr.call.call_args[0][2]
+        self.assertIn("lastvalue", call_params["output"])
+
+    def test_output_count_returns_error(self):
+        data = self._call([], output="count")
+        self.assertIn("error", data)
+
+    def test_extra_params_merged(self):
+        """extra_params forwarded to item.get (e.g. selectHosts)."""
+        from unittest.mock import MagicMock
+        from zabbix_mcp.api.extensions import item_threshold_search
+        mgr = MagicMock()
+        mgr.call.return_value = []
+        item_threshold_search(mgr, "test",
+                              extra_params={"selectHosts": ["host"]},
+                              lastvalue_ge=0)
+        call_params = mgr.call.call_args[0][2]
+        self.assertEqual(call_params.get("selectHosts"), ["host"])
+
+    def test_extra_params_do_not_override_output(self):
+        """Explicit output takes precedence over conflicting extra_params."""
+        from unittest.mock import MagicMock
+        from zabbix_mcp.api.extensions import item_threshold_search
+        mgr = MagicMock()
+        mgr.call.return_value = []
+        item_threshold_search(mgr, "test",
+                              output="itemid,name,key_,lastvalue",
+                              extra_params={"output": "extend"},
+                              lastvalue_ge=0)
+        call_params = mgr.call.call_args[0][2]
+        # explicit output should be a list (injected), not "extend"
+        self.assertIsInstance(call_params["output"], list)
 
 
 if __name__ == "__main__":

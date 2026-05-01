@@ -549,3 +549,152 @@ def capacity_forecast(
     except Exception as exc:
         logger.exception("Unexpected error in capacity_forecast")
         return _error_json(f"Unexpected error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# 4. Item Threshold Search
+# ---------------------------------------------------------------------------
+
+
+def item_threshold_search(
+    client_manager: ClientManager,
+    server_name: str,
+    **kwargs: Any,
+) -> str:
+    """Search items whose current lastvalue satisfies numeric threshold conditions.
+
+    Fetches all items matching the query (via ``item.get``), then filters
+    client-side by ``lastvalue``.  Items with non-numeric lastvalues (strings,
+    empty, None) are silently skipped.  Results are sorted by lastvalue
+    descending (highest first) by default.
+
+    Use this instead of ``item_get`` + manual post-processing when you want to
+    find items above or below a threshold — e.g. "SNAT pool usage >= 50%",
+    "interface discard counter > 0", or "disk usage >= 80%".
+
+    Args:
+        client_manager: The ClientManager instance for Zabbix API access.
+        server_name: Name of the target Zabbix server.
+        **kwargs:
+            Threshold conditions (at least one recommended):
+
+            - ``lastvalue_gt`` (float): keep items where lastvalue > X.
+            - ``lastvalue_ge`` (float): keep items where lastvalue >= X.
+            - ``lastvalue_lt`` (float): keep items where lastvalue < X.
+            - ``lastvalue_le`` (float): keep items where lastvalue <= X.
+
+            Item query (all optional):
+
+            - ``search`` (dict): Zabbix substring search, e.g.
+              ``{"key_": "discards"}`` or ``{"key_": ".usage"}``.
+              Zabbix matches substrings by default, so ``"discards"`` matches
+              ``net.if.in.discards[eth0]``.  For wildcard matching, set
+              ``extra_params={"searchWildcardsEnabled": True}`` and use
+              ``{"key_": "*.usage"}``-style patterns.
+            - ``filter`` (dict): exact-match filter, e.g. ``{"type": 0}``.
+            - ``hostids`` (list[str]): restrict to these host IDs.
+            - ``groupids`` (list[str]): restrict to these host group IDs.
+            - ``output`` (str): fields to include per result item.
+              Default: ``"itemid,name,key_,lastvalue"``.  ``"extend"`` returns
+              all fields.  ``lastvalue`` is always injected when missing,
+              as it is required for threshold filtering.
+            - ``extra_params`` (dict): additional Zabbix item.get parameters,
+              e.g. ``{"selectHosts": ["host"]}`` to embed the host name.
+
+            Result control:
+
+            - ``sort_desc`` (bool): sort by lastvalue descending (default:
+              True — highest values first).
+            - ``result_limit`` (int): max matched items to return after
+              filtering and sorting.
+
+    Returns:
+        JSON string ``{"scanned": N, "matched": M, "returned": R, "items": [...]}``,
+        where *scanned* is the total items from ``item.get``, *matched* is the
+        count passing the threshold filter, and *returned* is the number of items
+        actually included (equal to *matched* unless ``result_limit`` is set).
+        On error, returns ``{"error": "..."}``.
+    """
+    try:
+        # --- Extract tool-specific parameters (not forwarded to Zabbix API) ---
+        lastvalue_gt = kwargs.get("lastvalue_gt")
+        lastvalue_ge = kwargs.get("lastvalue_ge")
+        lastvalue_lt = kwargs.get("lastvalue_lt")
+        lastvalue_le = kwargs.get("lastvalue_le")
+        sort_desc = bool(kwargs.get("sort_desc", True))
+        result_limit = kwargs.get("result_limit")
+        extra_params: dict[str, Any] = kwargs.get("extra_params") or {}
+
+        # --- Build item.get parameters ---
+        # extra_params merged first so explicit arguments take precedence on conflict
+        params: dict[str, Any] = dict(extra_params)
+
+        # Validate and normalise output; always inject lastvalue for filtering
+        output = kwargs.get("output") or "itemid,name,key_,lastvalue"
+        if output == "count":
+            return _error_json(
+                "output='count' is not supported by item_threshold_search. "
+                "The tool reports scanned/matched counts separately in its response."
+            )
+        if output != "extend":
+            fields = [f.strip() for f in output.split(",") if f.strip()]
+            if "lastvalue" not in fields:
+                fields.append("lastvalue")
+            params["output"] = fields
+        else:
+            params["output"] = output
+
+        for key in ("filter", "search", "hostids", "groupids",
+                    "searchByAny", "searchWildcardsEnabled"):
+            val = kwargs.get(key)
+            if val is not None:
+                params[key] = val
+
+        # --- Fetch all matching items ---
+        items: list[dict[str, Any]] = client_manager.call(server_name, "item.get", params)
+        scanned = len(items)
+
+        # --- Filter by lastvalue threshold conditions ---
+        matched: list[dict[str, Any]] = []
+        for item in items:
+            raw = item.get("lastvalue")
+            if raw is None or raw == "":
+                continue
+            try:
+                val = float(raw)
+            except (ValueError, TypeError):
+                continue
+
+            if lastvalue_gt is not None and not (val > float(lastvalue_gt)):
+                continue
+            if lastvalue_ge is not None and not (val >= float(lastvalue_ge)):
+                continue
+            if lastvalue_lt is not None and not (val < float(lastvalue_lt)):
+                continue
+            if lastvalue_le is not None and not (val <= float(lastvalue_le)):
+                continue
+
+            matched.append(item)
+
+        # --- Sort by lastvalue ---
+        matched.sort(
+            key=lambda x: float(x.get("lastvalue") or 0),
+            reverse=sort_desc,
+        )
+
+        total_matched = len(matched)
+
+        # --- Apply result limit ---
+        if result_limit is not None:
+            matched = matched[: int(result_limit)]
+
+        return json.dumps({
+            "scanned": scanned,
+            "matched": total_matched,
+            "returned": len(matched),
+            "items": matched,
+        }, ensure_ascii=False)
+
+    except Exception as exc:
+        logger.exception("Unexpected error in item_threshold_search")
+        return _error_json(f"Unexpected error: {exc}")
