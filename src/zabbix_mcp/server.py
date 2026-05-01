@@ -1304,7 +1304,7 @@ def _register_tools(
     # ------------------------------------------------------------------
     # Extension tools (server-side analytics, graph export, reporting)
     # ------------------------------------------------------------------
-    from zabbix_mcp.api.extensions import graph_render, anomaly_detect, capacity_forecast
+    from zabbix_mcp.api.extensions import graph_render, anomaly_detect, capacity_forecast, item_threshold_search
 
     async def _graph_render(
         *,
@@ -1385,6 +1385,55 @@ def _register_tools(
     if _ext_allowed("capacity_forecast"):
         mcp.add_tool(
             _capacity_forecast, name="capacity_forecast",
+            annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+        )
+        count += 1
+
+    async def _item_threshold_search(
+        *,
+        lastvalue_gt: Annotated[Optional[float], Field(description="Keep only items where lastvalue > this value (strict greater-than)")] = None,
+        lastvalue_ge: Annotated[Optional[float], Field(description="Keep only items where lastvalue >= this value (e.g. 50.0 to find SNAT pools above 50% utilization)")] = None,
+        lastvalue_lt: Annotated[Optional[float], Field(description="Keep only items where lastvalue < this value (strict less-than)")] = None,
+        lastvalue_le: Annotated[Optional[float], Field(description="Keep only items where lastvalue <= this value")] = None,
+        search: Annotated[Optional[dict], Field(description="Substring search filter, e.g. {\"key_\": \"discards\"} or {\"key_\": \".usage\"}. Zabbix matches substrings — 'discards' matches 'net.if.in.discards[eth0]'")] = None,
+        filter: Annotated[Optional[dict], Field(description="Exact-match filter, e.g. {\"type\": 0} for Zabbix agent items")] = None,
+        hostids: Annotated[Optional[list[str]], Field(description="Restrict search to these host IDs")] = None,
+        groupids: Annotated[Optional[list[str]], Field(description="Restrict search to these host group IDs")] = None,
+        output: Annotated[Optional[str], Field(description="Fields to return per item: 'itemid,name,key_,lastvalue' (default) or 'extend'. lastvalue is always included for threshold filtering.")] = "itemid,name,key_,lastvalue",
+        extra_params: Annotated[Optional[dict], Field(description="Additional Zabbix item.get parameters, e.g. {\"selectHosts\": [\"host\"]} to include host name, or {\"searchWildcardsEnabled\": true} for wildcard matching")] = None,
+        sort_desc: Annotated[Optional[bool], Field(description="Sort matched items by lastvalue descending — highest values first (default: true)")] = True,
+        result_limit: Annotated[Optional[int], Field(description="Max number of matched items to return after threshold filtering")] = None,
+        server: Annotated[Optional[str], Field(description=server_desc)] = None,
+    ) -> str:
+        """Find items whose current lastvalue is above or below a numeric threshold.
+
+        Fetches all items matching the query via item.get, filters client-side
+        by lastvalue, and returns sorted results. Non-numeric lastvalues are
+        skipped. Replaces manual item_get + float(lastvalue) post-processing.
+
+        Typical uses:
+        - SNAT pool utilization above 50%: search={"key_": ".usage"}, lastvalue_ge=50
+        - Interface discard counter above 0: search={"key_": "discards"}, lastvalue_gt=0
+        - Disk usage near capacity: search={"key_": "pused"}, lastvalue_ge=80
+
+        Returns {"scanned": N, "matched": M, "returned": R, "items": [...]} sorted by lastvalue.
+        matched = total passing threshold; returned = items included (may be less if result_limit set)."""
+        srv = client_manager.resolve_server(server or client_manager.default_server)
+        _auth_err = check_token_authorization(srv, tool_prefix="item")
+        if _auth_err:
+            return json.dumps({"error": True, "message": _auth_err, "type": "AuthorizationError"})
+        return await asyncio.to_thread(
+            item_threshold_search, client_manager, srv,
+            lastvalue_gt=lastvalue_gt, lastvalue_ge=lastvalue_ge,
+            lastvalue_lt=lastvalue_lt, lastvalue_le=lastvalue_le,
+            search=search, filter=filter, hostids=hostids, groupids=groupids,
+            output=output, extra_params=extra_params,
+            sort_desc=sort_desc, result_limit=result_limit,
+        )
+
+    if _ext_allowed("item_threshold_search"):
+        mcp.add_tool(
+            _item_threshold_search, name="item_threshold_search",
             annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
         )
         count += 1
