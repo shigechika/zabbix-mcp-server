@@ -1061,6 +1061,7 @@ def _make_tool_handler(
 
     # Build the actual handler that does the work
     async def handler(**kwargs: Any) -> str:
+        raw_json = kwargs.pop("raw_json", False)
         server_name = kwargs.get("server") or client_manager.default_server
         if not server_name:
             return json.dumps({"error": True, "message": "No Zabbix server configured.", "type": "ConfigurationError"})
@@ -1093,7 +1094,10 @@ def _make_tool_handler(
             result = await asyncio.to_thread(
                 client_manager.call, server_name, method_def.api_method, params,
             )
-            return _UNTRUSTED_PREAMBLE + _truncate_result(result, max_chars=response_max_chars)
+            data = _truncate_result(result, max_chars=response_max_chars)
+            if raw_json:
+                return data
+            return _UNTRUSTED_PREAMBLE + data
 
         except (ReadOnlyError, RateLimitError) as e:
             return json.dumps({"error": True, "message": str(e), "type": type(e).__name__})
@@ -1133,6 +1137,19 @@ def _make_tool_handler(
             default=default,
             annotation=annotation,
         ))
+
+    sig_params.append(inspect.Parameter(
+        "raw_json",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=False,
+        annotation=Annotated[bool, Field(
+            description=(
+                "If true, return the raw result without the security disclaimer preamble. "
+                "Useful for programmatic parsing (e.g. json.loads(result)). "
+                "Note: tools that return YAML strings (e.g. configuration_export) are not affected."
+            )
+        )],
+    ))
 
     handler.__signature__ = inspect.Signature(sig_params, return_annotation=str)
     handler.__name__ = method_def.tool_name
@@ -1233,6 +1250,13 @@ def _register_tools(
         method: Annotated[str, Field(description="Full Zabbix API method name, e.g. 'host.get', 'trigger.create'")],
         params: Annotated[Optional[dict], Field(description="API method parameters as a JSON object")] = None,
         server: Annotated[Optional[str], Field(description=server_desc)] = None,
+        raw_json: Annotated[bool, Field(
+            description=(
+                "If true, return the raw result without the security disclaimer preamble. "
+                "Useful for programmatic parsing (e.g. json.loads(result)). "
+                "Note: tools that return YAML strings (e.g. configuration_export) are not affected."
+            )
+        )] = False,
     ) -> str:
         """Execute any Zabbix API method directly. Use this for methods not covered
         by dedicated tools, or for advanced/undocumented API calls."""
@@ -1262,7 +1286,10 @@ def _register_tools(
             result = await asyncio.to_thread(
                 client_manager.call, server_name, method, params or {},
             )
-            return _UNTRUSTED_PREAMBLE + _truncate_result(result, max_chars=response_max_chars)
+            data = _truncate_result(result, max_chars=response_max_chars)
+            if raw_json:
+                return data
+            return _UNTRUSTED_PREAMBLE + data
         except (ReadOnlyError, RateLimitError, ValueError) as e:
             return json.dumps({"error": True, "message": str(e), "type": type(e).__name__})
         except Exception as e:
