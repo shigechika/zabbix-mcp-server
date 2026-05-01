@@ -552,6 +552,7 @@ class TestItemThresholdSearch(unittest.TestCase):
         data = self._call(self._make_items([10.0, 50.0, 75.0, 0.0]), lastvalue_ge=50.0)
         self.assertEqual(data["scanned"], 4)
         self.assertEqual(data["matched"], 2)
+        self.assertEqual(data["returned"], 2)
         matched_vals = [float(i["lastvalue"]) for i in data["items"]]
         self.assertIn(50.0, matched_vals)
         self.assertIn(75.0, matched_vals)
@@ -559,20 +560,24 @@ class TestItemThresholdSearch(unittest.TestCase):
     def test_lastvalue_gt_excludes_equal(self):
         data = self._call(self._make_items([50.0, 50.1, 49.9]), lastvalue_gt=50.0)
         self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
         self.assertEqual(float(data["items"][0]["lastvalue"]), 50.1)
 
     def test_lastvalue_le_filters_correctly(self):
         data = self._call(self._make_items([0.0, 5.0, 10.0, 100.0]), lastvalue_le=10.0)
         self.assertEqual(data["matched"], 3)
+        self.assertEqual(data["returned"], 3)
 
     def test_lastvalue_lt_excludes_equal(self):
         data = self._call(self._make_items([9.9, 10.0, 10.1]), lastvalue_lt=10.0)
         self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
         self.assertEqual(float(data["items"][0]["lastvalue"]), 9.9)
 
     def test_combined_ge_and_le(self):
         data = self._call(self._make_items([20.0, 50.0, 80.0, 90.0]), lastvalue_ge=50.0, lastvalue_le=80.0)
         self.assertEqual(data["matched"], 2)
+        self.assertEqual(data["returned"], 2)
 
     def test_sorted_desc_by_default(self):
         data = self._call(self._make_items([30.0, 10.0, 70.0, 50.0]), lastvalue_gt=0)
@@ -594,6 +599,7 @@ class TestItemThresholdSearch(unittest.TestCase):
         data = self._call(items, lastvalue_ge=0)
         self.assertEqual(data["scanned"], 4)
         self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["returned"], 1)
 
     def test_no_threshold_returns_all_numeric(self):
         data = self._call(self._make_items([1.0, 2.0, 3.0]))
