@@ -184,6 +184,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     ],
     "extensions": [
         "graph_render", "anomaly_detect", "capacity_forecast",
+        "item_threshold_search",
         "report_generate", "action_prepare", "action_confirm",
         "zabbix_raw_api_call", "health_check",
     ],
