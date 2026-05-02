@@ -637,8 +637,7 @@ def item_threshold_search(
         else:
             params["output"] = output
 
-        for key in ("filter", "search", "hostids", "groupids",
-                    "searchByAny", "searchWildcardsEnabled"):
+        for key in ("filter", "search", "hostids", "groupids"):
             val = kwargs.get(key)
             if val is not None:
                 params[key] = val
